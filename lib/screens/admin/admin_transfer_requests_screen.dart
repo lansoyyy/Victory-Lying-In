@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
+import 'package:maternity_clinic/services/notification_service.dart';
 import '../../utils/colors.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_patient_records_screen.dart';
@@ -52,14 +54,14 @@ class _AdminTransferRequestsScreenState
 
   Future<void> _fetchTransferRequests() async {
     try {
-      QuerySnapshot snapshot = await _firestore
+      QuerySnapshot<Map<String, dynamic>> snapshot = await _firestore
           .collection('transferRequests')
           .orderBy('createdAt', descending: true)
           .get();
 
       List<Map<String, dynamic>> requests = [];
       for (var doc in snapshot.docs) {
-        Map<String, dynamic> request = doc.data() as Map<String, dynamic>;
+        Map<String, dynamic> request = doc.data();
         request['id'] = doc.id;
         requests.add(request);
       }
@@ -82,10 +84,63 @@ class _AdminTransferRequestsScreenState
 
   Future<void> _updateRequestStatus(String requestId, String newStatus) async {
     try {
+      Map<String, dynamic>? requestData;
+      try {
+        final doc = await _firestore
+            .collection('transferRequests')
+            .doc(requestId)
+            .get();
+        requestData = doc.data();
+      } catch (_) {
+        requestData = null;
+      }
+
       await _firestore.collection('transferRequests').doc(requestId).update({
         'status': newStatus,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      final String userId = (requestData?['userId'] ?? '').toString();
+      final String userName = (requestData?['userName'] ?? '').toString();
+      final String transferTo = (requestData?['transferTo'] ?? '').toString();
+      String email = '';
+      String phone = '';
+      if (userId.isNotEmpty) {
+        try {
+          final userDoc =
+              await _firestore.collection('users').doc(userId).get();
+          final userData = userDoc.data();
+          email = (userData?['email'] ?? '').toString();
+          phone = (userData?['contactNumber'] ?? '').toString();
+        } catch (_) {}
+      }
+
+      try {
+        final notification = NotificationService();
+        final String who = userName.isNotEmpty ? userName : 'Patient';
+        await notification.sendToUser(
+          subject: 'Transfer request status update',
+          message:
+              'Dear $who, your transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''} is now "$newStatus".',
+          email: email,
+          phone: phone,
+          name: who,
+        );
+        await notification.sendToClinic(
+          subject: 'Transfer request updated',
+          message:
+              '${widget.userName} updated a transfer request${userName.isNotEmpty ? " for $userName" : ''} to "$newStatus".',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: widget.userRole,
+        userName: widget.userName,
+        action:
+            '${widget.userName} updated transfer request${userName.isNotEmpty ? " for $userName" : ''} to "$newStatus"',
+        entityType: 'transferRequests',
+        entityId: requestId,
+      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

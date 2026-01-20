@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
+import 'package:maternity_clinic/services/notification_service.dart';
 
 import 'admin_dashboard_screen.dart';
 import 'admin_appointment_scheduling_screen.dart';
@@ -128,6 +129,7 @@ class _AdminAppointmentManagementScreenState
           'patientId': userData?['userId']?.toString() ?? '',
           'name': userData?['name']?.toString() ?? 'Unknown',
           'email': userData?['email']?.toString() ?? '',
+          'contactNumber': userData?['contactNumber']?.toString() ?? '',
         };
 
         if (patientType == 'PRENATAL') {
@@ -234,7 +236,42 @@ class _AdminAppointmentManagementScreenState
         'acceptedBy': widget.userName,
       });
 
-      await _sendAppointmentAcceptedEmail(appointment);
+      final String email = (appointment['email'] ?? '').toString();
+      final String phone = (appointment['contactNumber'] ?? '').toString();
+      String dateText = '';
+      final dynamic dateField = appointment['appointmentDate'];
+      if (dateField is Timestamp) {
+        final d = dateField.toDate();
+        dateText =
+            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      }
+      final String timeSlot = (appointment['timeSlot'] ?? '').toString();
+
+      try {
+        final notification = NotificationService();
+        await notification.sendToUser(
+          subject: 'Your appointment has been accepted',
+          message:
+              'Dear $name, your appointment on $dateText at $timeSlot has been accepted.\n\nThank you,\nVictory Lying-in Center',
+          email: email,
+          phone: phone,
+          name: name,
+        );
+        await notification.sendToClinic(
+          subject: 'Appointment accepted',
+          message:
+              '${widget.userName} accepted $name\'s appointment on $dateText at $timeSlot.',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: widget.userRole,
+        userName: widget.userName,
+        action:
+            '${widget.userName} accepted $name\'s appointment on $dateText at $timeSlot',
+        entityType: 'appointments',
+        entityId: id,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -275,7 +312,42 @@ class _AdminAppointmentManagementScreenState
         'cancelledBy': widget.userName,
       });
 
-      await _sendAppointmentCancelledEmail(appointment);
+      final String email = (appointment['email'] ?? '').toString();
+      final String phone = (appointment['contactNumber'] ?? '').toString();
+      String dateText = '';
+      final dynamic dateField = appointment['appointmentDate'];
+      if (dateField is Timestamp) {
+        final d = dateField.toDate();
+        dateText =
+            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      }
+      final String timeSlot = (appointment['timeSlot'] ?? '').toString();
+
+      try {
+        final notification = NotificationService();
+        await notification.sendToUser(
+          subject: 'Your appointment has been cancelled',
+          message:
+              'Dear $name, your appointment on $dateText at $timeSlot has been cancelled.\n\nIf you have any questions, please contact the clinic.',
+          email: email,
+          phone: phone,
+          name: name,
+        );
+        await notification.sendToClinic(
+          subject: 'Appointment cancelled',
+          message:
+              '${widget.userName} cancelled $name\'s appointment on $dateText at $timeSlot.',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: widget.userRole,
+        userName: widget.userName,
+        action:
+            '${widget.userName} cancelled $name\'s appointment on $dateText at $timeSlot',
+        entityType: 'appointments',
+        entityId: id,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -306,10 +378,63 @@ class _AdminAppointmentManagementScreenState
 
   Future<void> _updateTransferStatus(String requestId, String newStatus) async {
     try {
+      Map<String, dynamic>? requestData;
+      try {
+        final doc = await _firestore
+            .collection('transferRequests')
+            .doc(requestId)
+            .get();
+        requestData = doc.data();
+      } catch (_) {
+        requestData = null;
+      }
+
       await _firestore.collection('transferRequests').doc(requestId).update({
         'status': newStatus,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      final String userId = (requestData?['userId'] ?? '').toString();
+      final String userName = (requestData?['userName'] ?? '').toString();
+      final String transferTo = (requestData?['transferTo'] ?? '').toString();
+      String email = '';
+      String phone = '';
+      if (userId.isNotEmpty) {
+        try {
+          final userDoc =
+              await _firestore.collection('users').doc(userId).get();
+          final userData = userDoc.data();
+          email = (userData?['email'] ?? '').toString();
+          phone = (userData?['contactNumber'] ?? '').toString();
+        } catch (_) {}
+      }
+
+      try {
+        final notification = NotificationService();
+        final String who = userName.isNotEmpty ? userName : 'Patient';
+        await notification.sendToUser(
+          subject: 'Transfer request status update',
+          message:
+              'Dear $who, your transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''} is now "$newStatus".',
+          email: email,
+          phone: phone,
+          name: who,
+        );
+        await notification.sendToClinic(
+          subject: 'Transfer request updated',
+          message:
+              '${widget.userName} updated a transfer request${userName.isNotEmpty ? " for $userName" : ''} to "$newStatus".',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: widget.userRole,
+        userName: widget.userName,
+        action:
+            '${widget.userName} updated transfer request${userName.isNotEmpty ? " for $userName" : ''} to "$newStatus"',
+        entityType: 'transferRequests',
+        entityId: requestId,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -329,93 +454,6 @@ class _AdminAppointmentManagementScreenState
           behavior: SnackBarBehavior.floating,
         ),
       );
-    }
-  }
-
-  String _encodeEmailQueryParameters(Map<String, String> params) {
-    return params.entries
-        .map((e) =>
-            '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
-        .join('&');
-  }
-
-  Future<void> _launchEmail({
-    required String to,
-    required String subject,
-    required String body,
-  }) async {
-    final uri = Uri(
-      scheme: 'mailto',
-      path: to,
-      query: _encodeEmailQueryParameters(<String, String>{
-        'subject': subject,
-        'body': body,
-      }),
-    );
-
-    if (!await launchUrl(uri)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not open email client'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  Future<void> _sendAppointmentAcceptedEmail(
-      Map<String, dynamic> appointment) async {
-    try {
-      final String email = appointment['email']?.toString() ?? '';
-      if (email.isEmpty) return;
-
-      final String name = appointment['name']?.toString() ?? 'Patient';
-      final dynamic dateField = appointment['appointmentDate'];
-      String dateText = '';
-      if (dateField is Timestamp) {
-        final d = dateField.toDate();
-        dateText =
-            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-      }
-      final String timeSlot = appointment['timeSlot']?.toString() ?? '';
-
-      await _launchEmail(
-        to: email,
-        subject: 'Your appointment has been accepted',
-        body:
-            'Dear $name, your appointment on $dateText at $timeSlot has been accepted.\n\nThank you,\nVictory Lying-in Center',
-      );
-    } catch (_) {
-      // Fail silently for email queue
-    }
-  }
-
-  Future<void> _sendAppointmentCancelledEmail(
-      Map<String, dynamic> appointment) async {
-    try {
-      final String email = appointment['email']?.toString() ?? '';
-      if (email.isEmpty) return;
-
-      final String name = appointment['name']?.toString() ?? 'Patient';
-      final dynamic dateField = appointment['appointmentDate'];
-      String dateText = '';
-      if (dateField is Timestamp) {
-        final d = dateField.toDate();
-        dateText =
-            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-      }
-      final String timeSlot = appointment['timeSlot']?.toString() ?? '';
-
-      await _launchEmail(
-        to: email,
-        subject: 'Your appointment has been cancelled',
-        body:
-            'Dear $name, your appointment on $dateText at $timeSlot has been cancelled.\n\nIf you have any questions, please contact the clinic.',
-      );
-    } catch (_) {
-      // Fail silently for email queue
     }
   }
 

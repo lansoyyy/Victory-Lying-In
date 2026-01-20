@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
+import 'package:maternity_clinic/services/notification_service.dart';
 import '../utils/colors.dart';
 import '../widgets/forgot_password_dialog.dart';
 import 'prenatal_dashboard_screen.dart';
@@ -257,6 +259,58 @@ class _NotificationAppointmentScreenState
         'cancelledAt': FieldValue.serverTimestamp(),
         'cancelledBy': 'patient',
       });
+
+      String email = '';
+      String phone = '';
+      String name = _userName;
+      try {
+        final user = _auth.currentUser;
+        if (user != null) {
+          final userDoc =
+              await _firestore.collection('users').doc(user.uid).get();
+          final userData = userDoc.data();
+          email = (userData?['email'] ?? user.email ?? '').toString();
+          phone = (userData?['contactNumber'] ?? '').toString();
+          final n = (userData?['name'] ?? '').toString();
+          if (n.isNotEmpty) {
+            name = n;
+          }
+        }
+      } catch (_) {}
+
+      String dateText = '';
+      final dynamic dateField = appointment['appointmentDate'];
+      if (dateField is Timestamp) {
+        final d = dateField.toDate();
+        dateText =
+            '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      }
+      final String timeSlot = (appointment['timeSlot'] ?? '').toString();
+
+      try {
+        final notification = NotificationService();
+        await notification.sendToUser(
+          subject: 'Appointment cancelled',
+          message:
+              'Dear $name, your appointment on $dateText at $timeSlot has been cancelled.\n\nIf you have any questions, please contact the clinic.',
+          email: email,
+          phone: phone,
+          name: name,
+        );
+        await notification.sendToClinic(
+          subject: 'Appointment cancelled by patient',
+          message:
+              '$name cancelled their appointment on $dateText at $timeSlot.',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: 'patient',
+        userName: name,
+        action: '$name cancelled their appointment on $dateText at $timeSlot',
+        entityType: 'appointments',
+        entityId: id,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

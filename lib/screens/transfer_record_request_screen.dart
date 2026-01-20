@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
+import 'package:maternity_clinic/services/notification_service.dart';
 import '../utils/colors.dart';
 import '../widgets/forgot_password_dialog.dart';
 import 'prenatal_dashboard_screen.dart';
@@ -131,6 +133,53 @@ class _TransferRecordRequestScreenState
         'cancelledBy': 'patient',
       });
 
+      String email = '';
+      String phone = '';
+      String name = _userName;
+      try {
+        final user = _auth.currentUser;
+        if (user != null) {
+          final userDoc =
+              await _firestore.collection('users').doc(user.uid).get();
+          final userData = userDoc.data();
+          email = (userData?['email'] ?? user.email ?? '').toString();
+          phone = (userData?['contactNumber'] ?? '').toString();
+          final n = (userData?['name'] ?? '').toString();
+          if (n.isNotEmpty) {
+            name = n;
+          }
+        }
+      } catch (_) {}
+
+      final String transferTo =
+          (_existingRequest?['transferTo'] ?? '').toString();
+
+      try {
+        final notification = NotificationService();
+        await notification.sendToUser(
+          subject: 'Transfer request cancelled',
+          message:
+              'Dear $name, your transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''} has been cancelled.',
+          email: email,
+          phone: phone,
+          name: name,
+        );
+        await notification.sendToClinic(
+          subject: 'Transfer request cancelled',
+          message:
+              '$name cancelled a transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''}.',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: 'patient',
+        userName: name,
+        action:
+            '$name cancelled a transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''}',
+        entityType: 'transferRequests',
+        entityId: id,
+      );
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -238,16 +287,67 @@ class _TransferRecordRequestScreenState
           'status': 'Pending',
         };
 
-        // Update existing request or create new one
-        if (_existingRequest != null && _existingRequest!['id'] != null) {
+        String requestId = '';
+        final bool isUpdate =
+            _existingRequest != null && _existingRequest!['id'] != null;
+        if (isUpdate) {
+          requestId = _existingRequest!['id'].toString();
           await _firestore
               .collection('transferRequests')
-              .doc(_existingRequest!['id'])
+              .doc(requestId)
               .update(requestData);
         } else {
           requestData['createdAt'] = FieldValue.serverTimestamp();
-          await _firestore.collection('transferRequests').add(requestData);
+          final docRef =
+              await _firestore.collection('transferRequests').add(requestData);
+          requestId = docRef.id;
         }
+
+        String email = '';
+        String phone = '';
+        String name = _userName;
+        try {
+          final userDoc =
+              await _firestore.collection('users').doc(user.uid).get();
+          final userData = userDoc.data();
+          email = (userData?['email'] ?? user.email ?? '').toString();
+          phone = (userData?['contactNumber'] ?? '').toString();
+          final n = (userData?['name'] ?? '').toString();
+          if (n.isNotEmpty) {
+            name = n;
+          }
+        } catch (_) {}
+
+        final String transferTo = _transferToController.text.trim();
+
+        try {
+          final notification = NotificationService();
+          await notification.sendToUser(
+            subject: isUpdate
+                ? 'Transfer request updated'
+                : 'Transfer request submitted',
+            message:
+                'Dear $name, your transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''} has been ${isUpdate ? 'updated' : 'submitted'} and is pending review.',
+            email: email,
+            phone: phone,
+            name: name,
+          );
+          await notification.sendToClinic(
+            subject:
+                isUpdate ? 'Transfer request updated' : 'New transfer request',
+            message:
+                '$name ${isUpdate ? 'updated' : 'submitted'} a transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''}.',
+          );
+        } catch (_) {}
+
+        await AuditLogService.log(
+          role: 'patient',
+          userName: name,
+          action:
+              '$name ${isUpdate ? 'updated' : 'submitted'} a transfer of record request${transferTo.isNotEmpty ? ' to $transferTo' : ''}',
+          entityType: 'transferRequests',
+          entityId: requestId,
+        );
 
         setState(() {
           _isSubmitting = false;

@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:maternity_clinic/screens/admin/admin_dashboard_screen.dart';
 
 import '../utils/colors.dart';
+import '../services/audit_log_service.dart';
 
 class AdminLoginDialog extends StatefulWidget {
   const AdminLoginDialog({super.key});
@@ -33,8 +34,8 @@ class _AdminLoginDialogState extends State<AdminLoginDialog> {
     super.dispose();
   }
 
-  void _handleLogin() {
-    final username = _usernameController.text.trim();
+  Future<void> _handleLogin() async {
+    final username = _usernameController.text.trim().toLowerCase();
     final password = _passwordController.text.trim();
 
     if (username.isEmpty || password.isEmpty) {
@@ -46,30 +47,66 @@ class _AdminLoginDialogState extends State<AdminLoginDialog> {
       _isLoading = true;
     });
 
-    // Simulate authentication delay
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (_userCredentials.containsKey(username) &&
-          _userCredentials[username]?['password'] == password) {
-        // Authentication successful
-        final userData = _userCredentials[username]!;
-        Navigator.pop(context); // Close dialog
+    try {
+      String? role;
+      String? name;
+
+      try {
+        final doc =
+            await _firestore.collection('staffAccounts').doc(username).get();
+        if (doc.exists) {
+          final data = doc.data();
+          final storedPassword = (data?['password'] ?? '').toString();
+          if (storedPassword.isNotEmpty && storedPassword == password) {
+            role = (data?['role'] ?? '').toString();
+            name = (data?['name'] ?? '').toString();
+          }
+        }
+      } catch (_) {}
+
+      if (role == null || name == null || role.isEmpty || name.isEmpty) {
+        if (_userCredentials.containsKey(username) &&
+            _userCredentials[username]?['password'] == password) {
+          final userData = _userCredentials[username]!;
+          role = userData['role']!;
+          name = userData['name']!;
+        }
+      }
+
+      if (role != null && name != null && role.isNotEmpty && name.isNotEmpty) {
+        await AuditLogService.log(
+          role: role,
+          userName: name,
+          action: '$name logged in',
+          entityType: 'auth',
+          entityId: username,
+        );
+
+        if (!mounted) return;
+        Navigator.pop(context);
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => AdminDashboardScreen(
-              userRole: userData['role']!,
-              userName: userData['name']!,
+              userRole: role!,
+              userName: name!,
             ),
           ),
         );
       } else {
-        // Authentication failed
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
         });
         _showErrorDialog('Invalid username or password');
       }
-    });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      _showErrorDialog('Login failed. Please try again.');
+    }
   }
 
   void _showErrorDialog(String message) {

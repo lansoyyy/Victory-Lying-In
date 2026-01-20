@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
+import 'package:maternity_clinic/services/notification_service.dart';
 
 class BookAppointmentDialog extends StatefulWidget {
   final String patientType; // 'PRENATAL' or 'POSTNATAL'
@@ -199,7 +201,55 @@ class _BookAppointmentDialogState extends State<BookAppointmentDialog> {
         });
       }
 
-      await _firestore.collection('appointments').add(appointmentData);
+      final docRef =
+          await _firestore.collection('appointments').add(appointmentData);
+
+      String email = '';
+      String phone = '';
+      String name = _fullNameController.text.trim();
+      try {
+        final userDoc =
+            await _firestore.collection('users').doc(user.uid).get();
+        final userData = userDoc.data();
+        email = (userData?['email'] ?? user.email ?? '').toString();
+        phone = (userData?['contactNumber'] ?? '').toString();
+        final n = (userData?['name'] ?? '').toString();
+        if (n.isNotEmpty) {
+          name = n;
+        }
+      } catch (_) {
+        email = (user.email ?? '').toString();
+      }
+
+      final String dateText =
+          '${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}';
+      final String timeSlot = (_selectedTimeSlot ?? '').toString();
+
+      try {
+        final notification = NotificationService();
+        await notification.sendToUser(
+          subject: 'Appointment request submitted',
+          message:
+              'Dear $name, your appointment request for $dateText at $timeSlot has been submitted and is pending approval.\n\nThank you,\nVictory Lying-in Center',
+          email: email,
+          phone: phone,
+          name: name,
+        );
+        await notification.sendToClinic(
+          subject: 'New appointment request',
+          message:
+              '$name submitted an appointment request for $dateText at $timeSlot.',
+        );
+      } catch (_) {}
+
+      await AuditLogService.log(
+        role: 'patient',
+        userName: name,
+        action:
+            '$name booked an appointment request for $dateText at $timeSlot',
+        entityType: 'appointments',
+        entityId: docRef.id,
+      );
 
       if (mounted) {
         Navigator.pop(context, true);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,6 +9,7 @@ import 'package:maternity_clinic/screens/admin/admin_appointment_scheduling_scre
 import 'package:maternity_clinic/screens/admin/admin_appointment_management_screen.dart';
 import 'package:maternity_clinic/screens/admin/admin_patient_records_screen.dart';
 import 'package:maternity_clinic/screens/admin/admin_transfer_requests_screen.dart';
+import 'package:maternity_clinic/services/audit_log_service.dart';
 import '../../utils/colors.dart';
 import '../auth/home_screen.dart';
 
@@ -69,6 +71,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // History logs (admin only)
   List<Map<String, dynamic>> _historyLogs = [];
 
+  bool _dummyDataSeeded = false;
+  bool _isSeedingDummyData = false;
+
   bool _isLoading = true;
 
   // Check if current user is admin
@@ -101,6 +106,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Future<void> _fetchDashboardData() async {
     try {
+      bool dummySeeded = false;
+      try {
+        final seedSnap =
+            await _firestore.collection('appConfig').doc('dummyDataSeed').get();
+        dummySeeded = (seedSnap.data()?['seeded'] ?? false) == true;
+      } catch (_) {
+        dummySeeded = false;
+      }
+
       // Fetch prenatal and postnatal counts
       final prenatalSnapshot = await _firestore
           .collection('users')
@@ -360,6 +374,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           _todaysAppointments = todaysAppointments;
           _highRiskPatients = highRiskCount;
           _historyLogs = historyLogs;
+          _dummyDataSeeded = dummySeeded;
           _isLoading = false;
         });
       }
@@ -450,6 +465,91 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             ],
                           ),
                         ),
+
+                        if (_isAdmin && !_dummyDataSeeded)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: ElevatedButton.icon(
+                                onPressed: _isSeedingDummyData
+                                    ? null
+                                    : () async {
+                                        final bool? confirmed =
+                                            await showDialog<bool>(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title: const Text(
+                                              'Seed Dummy Data',
+                                              style:
+                                                  TextStyle(fontFamily: 'Bold'),
+                                            ),
+                                            content: const Text(
+                                              'This will create 1 year of dummy data (400 appointments and 50 transfer requests). Continue?',
+                                              style: TextStyle(
+                                                  fontFamily: 'Regular'),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                    context, false),
+                                                child: Text(
+                                                  'Cancel',
+                                                  style: TextStyle(
+                                                    color: Colors.grey.shade700,
+                                                    fontFamily: 'Medium',
+                                                  ),
+                                                ),
+                                              ),
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                    context, true),
+                                                child: Text(
+                                                  'Seed',
+                                                  style: TextStyle(
+                                                    color: primary,
+                                                    fontFamily: 'Bold',
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+
+                                        if (confirmed == true) {
+                                          await _seedDummyData();
+                                        }
+                                      },
+                                icon: _isSeedingDummyData
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.dataset_rounded),
+                                label: Text(
+                                  _isSeedingDummyData
+                                      ? 'Seeding...'
+                                      : 'Seed Dummy Data',
+                                  style: const TextStyle(
+                                    fontFamily: 'Bold',
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: primary,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 18, vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
 
                         // Home Quick Stats Cards
                         Row(
@@ -2015,6 +2115,396 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
+  String _weekdayName(DateTime date) {
+    switch (date.weekday) {
+      case DateTime.monday:
+        return 'Monday';
+      case DateTime.tuesday:
+        return 'Tuesday';
+      case DateTime.wednesday:
+        return 'Wednesday';
+      case DateTime.thursday:
+        return 'Thursday';
+      case DateTime.friday:
+        return 'Friday';
+      case DateTime.saturday:
+        return 'Saturday';
+      case DateTime.sunday:
+        return 'Sunday';
+      default:
+        return '';
+    }
+  }
+
+  Future<void> _seedDummyData() async {
+    if (!_isAdmin) return;
+    if (_isSeedingDummyData) return;
+
+    setState(() {
+      _isSeedingDummyData = true;
+    });
+
+    final configRef = _firestore.collection('appConfig').doc('dummyDataSeed');
+
+    try {
+      final configSnap = await configRef.get();
+      final configData = configSnap.data();
+      if ((configData?['seeded'] ?? false) == true) {
+        if (mounted) {
+          setState(() {
+            _dummyDataSeeded = true;
+            _isSeedingDummyData = false;
+          });
+        }
+        return;
+      }
+
+      await configRef.set({
+        'seeded': false,
+        'seeding': true,
+        'requestedAt': FieldValue.serverTimestamp(),
+        'requestedBy': widget.userName,
+      }, SetOptions(merge: true));
+
+      final Random rng = Random();
+      final DateTime now = DateTime.now();
+      final DateTime start = now.subtract(const Duration(days: 365));
+
+      DateTime randomAllowedDate() {
+        while (true) {
+          final int offsetDays = rng.nextInt(365);
+          final DateTime d = start.add(Duration(days: offsetDays));
+          final int w = d.weekday;
+          if (w == DateTime.tuesday ||
+              w == DateTime.wednesday ||
+              w == DateTime.friday ||
+              w == DateTime.saturday) {
+            return DateTime(d.year, d.month, d.day);
+          }
+        }
+      }
+
+      List<String> timeSlotsFor(DateTime date) {
+        if (date.weekday == DateTime.saturday) {
+          return ['2:00 PM', '3:00 PM', '4:00 PM', '5:00 PM', '6:00 PM'];
+        }
+        return ['4:00 PM', '5:00 PM', '6:00 PM'];
+      }
+
+      String randomPhone() {
+        final int n = 100000000 + rng.nextInt(900000000);
+        return '09$n';
+      }
+
+      String pad4(int i) => i.toString().padLeft(4, '0');
+
+      final int userCount = 120;
+      final List<Map<String, dynamic>> users = [];
+      for (int i = 0; i < userCount; i++) {
+        final bool prenatal = i < userCount ~/ 2;
+        final String patientType = prenatal ? 'PRENATAL' : 'POSTNATAL';
+        final String userDocId = 'seed_u_${pad4(i + 1)}';
+        final DateTime createdAt = start.add(Duration(days: rng.nextInt(365)));
+        final int age = 18 + rng.nextInt(27);
+        final DateTime dob =
+            DateTime(now.year - age, 1 + rng.nextInt(12), 1 + rng.nextInt(28));
+        final String name = prenatal
+            ? 'Prenatal Patient ${i + 1}'
+            : 'Postnatal Patient ${i + 1 - (userCount ~/ 2)}';
+        users.add({
+          'id': userDocId,
+          'name': name,
+          'patientType': patientType,
+          'createdAt': createdAt,
+          'age': age,
+          'dob': dob,
+          'email': 'seed${i + 1}@example.com',
+          'contactNumber': randomPhone(),
+          'userId': 'P-${pad4(i + 1)}',
+        });
+      }
+
+      WriteBatch batch = _firestore.batch();
+      int ops = 0;
+
+      Future<void> flushIfNeeded() async {
+        if (ops >= 450) {
+          await batch.commit();
+          batch = _firestore.batch();
+          ops = 0;
+        }
+      }
+
+      Future<void> queueSet(
+        DocumentReference<Map<String, dynamic>> ref,
+        Map<String, dynamic> data,
+      ) async {
+        batch.set(ref, data);
+        ops++;
+        await flushIfNeeded();
+      }
+
+      for (final u in users) {
+        final userRef = _firestore.collection('users').doc(u['id'].toString());
+        await queueSet(userRef, {
+          'email': u['email'],
+          'firstName': u['name'],
+          'lastName': '',
+          'name': u['name'],
+          'contactNumber': u['contactNumber'],
+          'address': '',
+          'age': u['age'],
+          'dob': Timestamp.fromDate(u['dob']),
+          'patientType': u['patientType'],
+          'createdAt': Timestamp.fromDate(u['createdAt']),
+          'role': 'patient',
+          'profileCompleted': true,
+          'userId': u['userId'],
+        });
+      }
+
+      final int appointmentCount = 400;
+      for (int i = 0; i < appointmentCount; i++) {
+        final u = users[rng.nextInt(users.length)];
+        final DateTime apptDate = randomAllowedDate();
+        final List<String> slots = timeSlotsFor(apptDate);
+        final String timeSlot = slots[rng.nextInt(slots.length)];
+        final String patientType = u['patientType'].toString();
+        final String appointmentType;
+        if (patientType == 'PRENATAL') {
+          const prenatalTypes = [
+            'Prenatal Checkup',
+            'Initial Checkup',
+            'Ultrasound'
+          ];
+          appointmentType = prenatalTypes[rng.nextInt(prenatalTypes.length)];
+        } else {
+          appointmentType = 'Postnatal Checkup';
+        }
+
+        final int ageDays = now.difference(apptDate).inDays;
+        final int roll = rng.nextInt(100);
+        String status;
+        if (ageDays <= 45) {
+          if (roll < 30) {
+            status = 'Pending';
+          } else if (roll < 60) {
+            status = 'Accepted';
+          } else if (roll < 85) {
+            status = 'Completed';
+          } else {
+            status = 'Cancelled';
+          }
+        } else {
+          if (roll < 40) {
+            status = 'Completed';
+          } else if (roll < 75) {
+            status = 'Accepted';
+          } else if (roll < 90) {
+            status = 'Cancelled';
+          } else {
+            status = 'Rescheduled';
+          }
+        }
+
+        final String apptId = 'seed_a_${pad4(i + 1)}';
+        final apptRef = _firestore.collection('appointments').doc(apptId);
+
+        final DateTime createdAt =
+            apptDate.subtract(Duration(days: rng.nextInt(7) + 1));
+
+        final Map<String, dynamic> apptData = {
+          'userId': u['id'],
+          'fullName': u['name'],
+          'appointmentType': appointmentType,
+          'appointmentDate': Timestamp.fromDate(apptDate),
+          'timeSlot': timeSlot,
+          'status': status,
+          'createdAt': Timestamp.fromDate(createdAt),
+          'reason': 'Routine checkup',
+          'patientType': patientType,
+        };
+
+        if (status == 'Accepted') {
+          apptData['acceptedAt'] = Timestamp.fromDate(apptDate);
+          apptData['acceptedBy'] = widget.userName;
+        } else if (status == 'Completed') {
+          apptData['acceptedAt'] = Timestamp.fromDate(apptDate);
+          apptData['acceptedBy'] = widget.userName;
+          apptData['completedAt'] = Timestamp.fromDate(apptDate);
+          apptData['completedBy'] = widget.userName;
+          apptData['notes'] = 'Please follow the recommended care plan.';
+        } else if (status == 'Cancelled') {
+          apptData['cancelledAt'] = Timestamp.fromDate(apptDate);
+          apptData['cancelledBy'] = roll % 2 == 0 ? 'patient' : widget.userName;
+        } else if (status == 'Rescheduled') {
+          apptData['rescheduledAt'] = Timestamp.fromDate(apptDate);
+          apptData['rescheduleReason'] = 'Schedule adjustment';
+        }
+
+        await queueSet(apptRef, apptData);
+
+        final DateTime logTs = apptDate.add(const Duration(hours: 8));
+        String logRole = 'admin';
+        String logUserName = widget.userName;
+        String action;
+        final String weekday = _weekdayName(apptDate);
+        final String patientName = u['name'].toString();
+        if (status == 'Pending') {
+          logRole = 'patient';
+          logUserName = patientName;
+          action = '$patientName booked an appointment on $weekday';
+        } else if (status == 'Accepted') {
+          action =
+              'Admin approved $patientName\'s Book Appointment on $weekday';
+        } else if (status == 'Completed') {
+          logRole = 'nurse';
+          logUserName = 'Nurse 1';
+          action = 'Nurse completed $patientName\'s Appointment on $weekday';
+        } else if (status == 'Cancelled') {
+          if (apptData['cancelledBy'] == 'patient') {
+            logRole = 'patient';
+            logUserName = patientName;
+            action = '$patientName cancelled an appointment on $weekday';
+          } else {
+            action = 'Admin cancelled $patientName\'s Appointment on $weekday';
+          }
+        } else {
+          action = 'Admin rescheduled $patientName\'s Appointment on $weekday';
+        }
+
+        final logId = 'seed_l_a_${pad4(i + 1)}';
+        final logRef = _firestore.collection('historyLogs').doc(logId);
+        await queueSet(logRef, {
+          'timestamp': Timestamp.fromDate(logTs),
+          'role': logRole,
+          'userName': logUserName,
+          'action': action,
+          'entityType': 'appointments',
+          'entityId': apptId,
+        });
+      }
+
+      final int transferCount = 50;
+      for (int i = 0; i < transferCount; i++) {
+        final u = users[rng.nextInt(users.length)];
+        final DateTime createdAt = start.add(Duration(days: rng.nextInt(365)));
+        final int roll = rng.nextInt(100);
+        String status;
+        if (roll < 10) {
+          status = 'Pending';
+        } else if (roll < 30) {
+          status = 'Processing';
+        } else if (roll < 90) {
+          status = 'Completed';
+        } else {
+          status = 'Rejected';
+        }
+
+        final String requestId = 'seed_t_${pad4(i + 1)}';
+        final reqRef = _firestore.collection('transferRequests').doc(requestId);
+        final String transferTo = 'Clinic ${1 + rng.nextInt(8)}';
+
+        await queueSet(reqRef, {
+          'userId': u['id'],
+          'userName': u['name'],
+          'patientType': u['patientType'],
+          'fullName': u['name'],
+          'dateOfBirth': '${u['dob'].month}/${u['dob'].day}/${u['dob'].year}',
+          'address': 'Sample address',
+          'otherContact': '',
+          'transferTo': transferTo,
+          'newDoctor': 'Dr. Sample',
+          'clinicAddress': 'Sample clinic address',
+          'contactInfo': u['contactNumber'],
+          'reason': 'Continuing care',
+          'recordsRequested': {
+            'laboratoryResults': true,
+            'diagnosticReports': true,
+            'vaccinationRecords': false,
+            'clinicalNotes': true,
+          },
+          'transferMethod': 'Email',
+          'printedName': u['name'],
+          'signatureDate':
+              '${createdAt.month}/${createdAt.day}/${createdAt.year}',
+          'status': status,
+          'createdAt': Timestamp.fromDate(createdAt),
+          'updatedAt': Timestamp.fromDate(createdAt),
+        });
+
+        final DateTime logTs = createdAt.add(const Duration(hours: 9));
+        final String logId = 'seed_l_t_${pad4(i + 1)}';
+        final logRef = _firestore.collection('historyLogs').doc(logId);
+        await queueSet(logRef, {
+          'timestamp': Timestamp.fromDate(logTs),
+          'role': 'admin',
+          'userName': widget.userName,
+          'action':
+              'Admin updated ${u['name']}\'s Transfer of Record Request to $status',
+          'entityType': 'transferRequests',
+          'entityId': requestId,
+        });
+      }
+
+      if (ops > 0) {
+        await batch.commit();
+      }
+
+      await configRef.set({
+        'seeded': true,
+        'seeding': false,
+        'seededAt': FieldValue.serverTimestamp(),
+        'seededBy': widget.userName,
+        'appointments': 400,
+        'transfers': 50,
+        'yearSpanDays': 365,
+      }, SetOptions(merge: true));
+
+      await AuditLogService.log(
+        role: widget.userRole,
+        userName: widget.userName,
+        action: '${widget.userName} seeded dummy data',
+        entityType: 'seed',
+        entityId: 'dummyDataSeed',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Dummy data seeded successfully'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+
+      await _fetchDashboardData();
+    } catch (e) {
+      await configRef.set({
+        'seeding': false,
+        'errorAt': FieldValue.serverTimestamp(),
+        'error': e.toString(),
+      }, SetOptions(merge: true));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to seed dummy data'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSeedingDummyData = false;
+        });
+      }
+    }
+  }
+
   void _showAddStaffDialog() {
     if (!_isAdmin) {
       _showAccessDeniedDialog();
@@ -2206,6 +2696,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               'createdAt': FieldValue.serverTimestamp(),
                               'createdBy': widget.userName,
                             });
+
+                            await AuditLogService.log(
+                              role: widget.userRole,
+                              userName: widget.userName,
+                              action:
+                                  "${widget.userName} added staff account for $name ($username)",
+                              entityType: 'staffAccounts',
+                              entityId: username,
+                            );
 
                             if (!mounted) return;
                             Navigator.of(dialogContext).pop();
@@ -2438,6 +2937,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               'password': newPass,
                               'updatedAt': FieldValue.serverTimestamp(),
                             }, SetOptions(merge: true));
+
+                            await AuditLogService.log(
+                              role: widget.userRole,
+                              userName: widget.userName,
+                              action:
+                                  '${widget.userName} changed the admin password',
+                              entityType: 'staffAccounts',
+                              entityId: 'admin',
+                            );
 
                             if (!mounted) return;
                             Navigator.of(dialogContext).pop();
