@@ -2,9 +2,9 @@ class ThirdPartyConfig {
   static const String emailJsEndpoint =
       'https://api.emailjs.com/api/v1.0/email/send';
 
-  static const String emailJsServiceId = 'YOUR_EMAILJS_SERVICE_ID';
-  static const String emailJsTemplateId = 'YOUR_EMAILJS_TEMPLATE_ID';
-  static const String emailJsPublicKey = 'YOUR_EMAILJS_PUBLIC_KEY';
+  static const String emailJsServiceId = 'service_8o3x127';
+  static const String emailJsTemplateId = 'template_az392tk';
+  static const String emailJsPublicKey = 'flMv41byxYQp2CFI8';
 
   static const String semaphoreMessagesEndpoint =
       'https://api.semaphore.co/api/v4/messages';
