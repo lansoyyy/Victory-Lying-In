@@ -9,8 +9,8 @@ class ThirdPartyConfig {
   static const String semaphoreMessagesEndpoint =
       'https://api.semaphore.co/api/v4/messages';
 
-  static const String semaphoreApiKey = 'YOUR_SEMAPHORE_API_KEY';
-  static const String semaphoreSenderName = 'SEMAPHORE';
+  static const String semaphoreApiKey = 'ebe19a2c821d7173336e61d2cac1ebb5';
+  static const String semaphoreSenderName = 'Victory';
 
   static const String clinicNotificationEmail = 'victorylying@yahoo.com';
   static const String clinicNotificationPhone = '09568791685';
